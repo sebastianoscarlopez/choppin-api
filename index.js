@@ -1,6 +1,6 @@
 const  express  =  require('express')
 const ExpressGraphQL = require("express-graphql")
-const { schema } = require("./graphql/_songs.js")
+const { schema } = require("./graphql/songs.js")
 const cors = require('cors')
 
 const  app  =  express()

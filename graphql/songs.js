@@ -6,26 +6,19 @@ const database = new sqlite3.Database("../choppin.db")
 
 //create a tables
 const createTables = () => {
+//  let query = `DROP TABLE IF EXISTS songs`
+//  database.run(query)
+
   let query = `
-    CREATE TABLE IF NOT EXISTS requests (
-        id integer PRIMARY KEY,
-        id_song text,
-        requested text,
-        played text,
-        enable integer
-      )`
-  database.run(query)
-
-  query = `DROP TABLE songs`
-      database.run(query)
-
-    query = `
       CREATE TABLE IF NOT EXISTS songs (
-        id text,
+        id text primary key,
         title text,
         description text,
-        added text,
-        enable integer
+        added datetime,
+        lastRequested datetime,
+        isPending booblean,
+        totalRequest int,
+        enable booblean
       )`
   return database.run(query)
 }
@@ -33,17 +26,6 @@ const createTables = () => {
 //call function to init tables
 createTables()
 
-//creacte graphql request object
-const RequestType = new graphql.GraphQLObjectType({
-  name: "Request",
-  fields: {
-    id: { type: graphql.GraphQLID },
-    id_song: { type: graphql.GraphQLString },
-    requested: { type: graphql.GraphQLString },
-    played: { type: graphql.GraphQLString },
-    enable: { type: graphql.GraphQLBoolean }
-  }
-})
 //creacte graphql song object
 const SongType = new graphql.GraphQLObjectType({
   name: "Song",
@@ -52,20 +34,21 @@ const SongType = new graphql.GraphQLObjectType({
     title: { type: graphql.GraphQLString },
     description: { type: graphql.GraphQLString },
     added: { type: graphql.GraphQLString },
+    lastRequested: { type: graphql.GraphQLString },
+    isPending: { type: graphql.GraphQLBoolean },
+    totalRequest: { type: graphql.GraphQLInt },
     enable: { type: graphql.GraphQLBoolean }
   }
 })
-// create a graphql query to select all and by id
+
 var queryType = new graphql.GraphQLObjectType({
   name: "Query",
   fields: {
-    //first query to select all pending
-    RequestPending: {
-      type: graphql.GraphQLList(RequestType),
+    Songs: {
+      type: graphql.GraphQLList(SongType),
       resolve: (root, args, context, info) => {
         return new Promise((resolve, reject) => {
-          // raw SQLite query to select from table
-          database.all("SELECT * FROM requests", function(err, rows) {
+          database.all("SELECT * FROM songs ORDER BY lastRequested", function(err, rows) {
             if (err) {
               reject([])
             }
@@ -74,75 +57,108 @@ var queryType = new graphql.GraphQLObjectType({
         })
       }
     },
-    // query to song by id
-    Song: {
-      type: SongType,
-      args: {
-        id: {
-          type: new graphql.GraphQLNonNull(graphql.GraphQLString)
-        }
-      },
-      resolve: (root, { id }, context, info) => {
+    Pending: {
+      type: graphql.GraphQLList(SongType),
+      resolve: (root, args, context, info) => {
         return new Promise((resolve, reject) => {
-          database.all("SELECT * FROM songs WHERE id = (?)", [id], function(
+          database.all("SELECT * FROM songs WHERE isPending = true ORDER BY lastRequested", function(
             err,
             rows
           ) {
             if (err) {
-              reject(null)
+              reject([])
             }
-            resolve(rows[0])
+            resolve(rows)
           })
         })
       }
     }
   }
 })
+
 //mutation type is a type of object to modify data (INSERT,DELETE,UPDATE)
 var mutationType = new graphql.GraphQLObjectType({
   name: "Mutation",
   fields: {
-    //mutation for creacte
-    createSong: {
-      //type of object to return after create in SQLite
+    playedSong: {
       type: SongType,
-      //argument of mutation creactePost to get from request
+      args: {
+        id: {
+          type: new graphql.GraphQLNonNull(graphql.GraphQLString)
+        }
+      },
+      resolve: (root, { id }) => {
+        return new Promise((resolve, reject) => {
+          database.run(
+            "UPDATE songs SET isPending=? WHERE id = ?",
+            [false, id],
+            err => {
+              if (err) {
+                reject(null)
+              }
+              resolve({
+                id
+              })
+            }
+          )
+        })
+      }
+    },
+    requestSong: {
+      type: SongType,
       args: {
         id: {
           type: new graphql.GraphQLNonNull(graphql.GraphQLString)
         },
         title: {
           type: new graphql.GraphQLNonNull(graphql.GraphQLString)
-        },
-        description: {
-          type: new graphql.GraphQLNonNull(graphql.GraphQLString)
-        },
-        added: {
-          type: new graphql.GraphQLNonNull(graphql.GraphQLString)
-        },
-        enable: {
-          type: new graphql.GraphQLNonNull(graphql.GraphQLBoolean)
         }
       },
-      resolve: (root, { id, title, description, added, enable }) => {
+      resolve: (root, { id, title }) => {
         return new Promise((resolve, reject) => {
-          //raw SQLite to insert a new post in post table
-          database.run(
-            "INSERT INTO songs (id, title, description, added, enable) VALUES (?,?,?,?,?)",
-            [id, title, description, added, enable],
-            err => {
-              if (err) {
-                reject(null)
-              }
-              resolve({
-                id: id,
-                title: title,
-                description: description,
-                added: added,
-                enable: enable
-              })
+          const now = new Date().toISOString()
+          database.all("SELECT * FROM songs where id = ?", [id], function(
+            err,
+            rows
+          ) {
+            console.log(err)
+            if (err) {
+              reject([])
             }
-          )
+            // song does not exist? then insert, else totalRequest++, isPending = true
+            if (rows.length === 0) {
+              database.run(
+                "INSERT INTO songs (id, title, added, lastRequested, totalRequest, isPending, enable) VALUES (?,?,?,?,?,?,?)",
+                [id, title, now, now, 1, true, true],
+                err => {
+                  if (err) {
+                    reject(null)
+                  }
+                  resolve({
+                    id: id,
+                    title: title,
+                    totalRequest: 1
+                  })
+                }
+              )
+            } else {
+              const totalRequest = rows[0].totalRequest + 1
+              database.run(
+                "UPDATE songs SET lastRequested=?, totalRequest=?, isPending=? WHERE id = ?",
+                [now, totalRequest, true, id],
+                err => {
+                  if (err) {
+                    reject(null)
+                  }
+                  resolve({
+                    id: id,
+                    title: title,
+                    totalRequest: totalRequest
+                  })
+                }
+              )
+            }
+          })
         })
       }
     }

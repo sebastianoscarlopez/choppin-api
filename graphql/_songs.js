@@ -6,10 +6,10 @@ const database = new sqlite3.Database("../choppin.db")
 
 //create a tables
 const createTables = () => {
-  let query = `DROP TABLE IF EXISTS songs`
+//  let query = `DROP TABLE IF EXISTS songs`
   database.run(query)
 
-  query = `
+  let query = `
       CREATE TABLE IF NOT EXISTS songs (
         id text primary key,
         title text,
